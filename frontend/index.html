@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI PDF Báo Giá — Trích Xuất Thông Minh</title>
+  <meta name="description" content="AI Agent tự động trích xuất dữ liệu từ mọi loại file báo giá: PDF mềm, bản scan, ảnh chụp điện thoại." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/styles.css" />
+</head>
+<body>
+  <!-- ── Sidebar ──────────────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <circle cx="9" cy="13" r="1"></circle><circle cx="12" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle>
+        </svg>
+      </div>
+      <span class="logo-text">PDF Agent</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-section="upload" onclick="showSection('upload')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+        <span>Tải Lên</span>
+      </a>
+      <a href="#" class="nav-item" data-section="history" onclick="showSection('history')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span>Lịch Sử</span>
+      </a>
+      <a href="#" class="nav-item" data-section="docs" onclick="showSection('docs')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        <span>Hướng Dẫn</span>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="api-badge" id="apiBadge">
+        <span class="dot dot-green"></span>
+        <span>Gemini Flash</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main Content ─────────────────────────────────────────── -->
+  <main class="main-content">
+    <!-- Header -->
+    <header class="top-bar">
+      <div class="top-bar-left">
+        <h1 id="pageTitle">Tải Lên & Xử Lý</h1>
+        <p id="pageSubtitle">Hỗ trợ PDF mềm, bản scan, ảnh chụp điện thoại</p>
+      </div>
+      <div class="top-bar-right">
+        <div class="stat-pill" id="statDone">
+          <span class="stat-num" id="countDone">0</span>
+          <span class="stat-label">Hoàn thành</span>
+        </div>
+        <div class="stat-pill accent">
+          <span class="stat-num" id="countItems">0</span>
+          <span class="stat-label">Sản phẩm</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── SECTION: Upload ─────────────────────────────────────── -->
+    <section id="section-upload" class="section active">
+
+      <!-- Upload zone -->
+      <div class="upload-card" id="uploadCard">
+        <div class="upload-zone" id="uploadZone">
+          <div class="upload-icon-ring">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+          </div>
+          <h2 class="upload-title">Kéo thả hoặc chọn file</h2>
+          <p class="upload-help">PDF • JPG • PNG • WEBP • TIFF • BMP • HEIC</p>
+          <p class="upload-help-sub">PDF mềm, bản scan, ảnh chụp điện thoại — tất cả đều được xử lý</p>
+          <label class="btn btn-primary upload-btn" for="fileInput" id="uploadBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            Chọn file
+          </label>
+          <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.webp,.tiff,.bmp,.heic" hidden multiple />
+        </div>
+
+        <!-- Support types badges -->
+        <div class="type-badges">
+          <span class="type-badge"><span class="dot dot-green"></span> PDF Mềm</span>
+          <span class="type-badge"><span class="dot dot-blue"></span> PDF Scan</span>
+          <span class="type-badge"><span class="dot dot-yellow"></span> Ảnh Scan</span>
+          <span class="type-badge"><span class="dot dot-orange"></span> Ảnh Điện Thoại</span>
+          <span class="type-badge"><span class="dot dot-red"></span> Ảnh Lóa Sáng</span>
+          <span class="type-badge"><span class="dot dot-purple"></span> Ảnh Nghiêng</span>
+        </div>
+      </div>
+
+      <!-- Active Jobs -->
+      <div class="jobs-panel" id="jobsPanel" style="display:none">
+        <h3 class="panel-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>
+          Đang xử lý
+        </h3>
+        <div id="jobsList"></div>
+      </div>
+
+      <!-- Pipeline steps visual -->
+      <div class="pipeline-card hidden" id="pipelineCard">
+        <h3 class="panel-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          Pipeline xử lý
+        </h3>
+        <div class="pipeline-steps">
+          <div class="pipeline-step" id="step-detect">
+            <div class="step-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></div>
+            <div class="step-info"><span class="step-name">Phân loại</span><span class="step-desc">Detect loại tài liệu</span></div>
+            <div class="step-status" id="stepStatus-detect">⏳</div>
+          </div>
+          <div class="pipeline-step" id="step-preprocess">
+            <div class="step-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></div>
+            <div class="step-info"><span class="step-name">Tiền xử lý</span><span class="step-desc">Glare / Deskew / Deblur</span></div>
+            <div class="step-status" id="stepStatus-preprocess">⏸</div>
+          </div>
+          <div class="pipeline-step" id="step-ocr">
+            <div class="step-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></div>
+            <div class="step-info"><span class="step-name">OCR</span><span class="step-desc">PaddleOCR → EasyOCR → Gemini</span></div>
+            <div class="step-status" id="stepStatus-ocr">⏸</div>
+          </div>
+          <div class="pipeline-step" id="step-ai">
+            <div class="step-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></div>
+            <div class="step-info"><span class="step-name">AI Trích Xuất</span><span class="step-desc">Gemini Flash phân tích</span></div>
+            <div class="step-status" id="stepStatus-ai">⏸</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Results section -->
+      <div class="results-card hidden" id="resultsCard">
+        <div class="results-header">
+          <div>
+            <h3 class="panel-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+              Kết Quả Trích Xuất
+            </h3>
+            <div class="results-meta" id="resultsMeta"></div>
+          </div>
+          <div class="export-bar">
+            <button class="btn btn-sm btn-success" id="exportExcel" onclick="doExport('excel')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+              Excel
+            </button>
+            <button class="btn btn-sm btn-outline" id="exportCsv" onclick="doExport('csv')">CSV</button>
+            <button class="btn btn-sm btn-outline" id="exportJson" onclick="doExport('json')">JSON</button>
+          </div>
+        </div>
+
+        <!-- Summary info -->
+        <div class="doc-summary" id="docSummary"></div>
+
+        <!-- Table -->
+        <div class="table-container">
+          <table class="data-table" id="dataTable">
+            <thead>
+              <tr>
+                <th>STT</th>
+                <th>Mã SP</th>
+                <th>Tên sản phẩm / Dịch vụ</th>
+                <th>ĐVT</th>
+                <th>Số lượng</th>
+                <th>Đơn giá</th>
+                <th>Thành tiền</th>
+                <th>Ghi chú</th>
+                <th>Tin cậy</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+
+        <!-- Totals -->
+        <div class="totals-bar" id="totalsBar"></div>
+      </div>
+    </section>
+
+    <!-- ── SECTION: History ────────────────────────────────────── -->
+    <section id="section-history" class="section">
+      <div class="history-card">
+        <div class="history-header">
+          <h3 class="panel-title">Lịch Sử Xử Lý</h3>
+          <button class="btn btn-sm btn-outline" onclick="loadHistory()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+            Làm mới
+          </button>
+        </div>
+        <div id="historyList" class="history-list"></div>
+      </div>
+    </section>
+
+    <!-- ── SECTION: Docs ────────────────────────────────────────── -->
+    <section id="section-docs" class="section">
+      <div class="docs-card">
+        <h3 class="panel-title">Hướng Dẫn Sử Dụng</h3>
+        <div class="docs-grid">
+          <div class="doc-item">
+            <div class="doc-icon green">1</div>
+            <div><strong>Tải file lên</strong><p>Kéo thả hoặc click chọn file. Hỗ trợ PDF, JPG, PNG, WEBP, HEIC...</p></div>
+          </div>
+          <div class="doc-item">
+            <div class="doc-icon blue">2</div>
+            <div><strong>Chờ xử lý tự động</strong><p>AI sẽ tự phân loại tài liệu, xử lý ảnh (glare, nghiêng), OCR và trích xuất dữ liệu.</p></div>
+          </div>
+          <div class="doc-item">
+            <div class="doc-icon purple">3</div>
+            <div><strong>Xem kết quả</strong><p>Bảng dữ liệu chi tiết với độ tin cậy từng dòng. Màu xanh = tốt, vàng = trung bình, đỏ = cần kiểm tra.</p></div>
+          </div>
+          <div class="doc-item">
+            <div class="doc-icon orange">4</div>
+            <div><strong>Export dữ liệu</strong><p>Xuất ra Excel (có định dạng đẹp + sheet tóm tắt), CSV, hoặc JSON ngay lập tức.</p></div>
+          </div>
+        </div>
+
+        <div class="type-support-grid">
+          <h4>Loại tài liệu được hỗ trợ</h4>
+          <div class="support-grid">
+            <div class="support-item">
+              <span class="badge-green">✓ PDF Mềm</span>
+              <p>PDF có text layer, xuất từ Word/Excel/phần mềm kế toán</p>
+            </div>
+            <div class="support-item">
+              <span class="badge-blue">✓ PDF Scan</span>
+              <p>PDF được tạo từ máy scan — tự động chuyển sang OCR</p>
+            </div>
+            <div class="support-item">
+              <span class="badge-yellow">✓ Ảnh Scan</span>
+              <p>JPG/PNG từ máy scan phẳng, chất lượng tốt</p>
+            </div>
+            <div class="support-item">
+              <span class="badge-orange">✓ Ảnh Điện Thoại</span>
+              <p>Chụp bằng smartphone — AI tự chỉnh góc, tăng sáng</p>
+            </div>
+            <div class="support-item">
+              <span class="badge-red">✓ Ảnh Lóa Sáng</span>
+              <p>Phản sáng, đèn chiếu — xử lý bằng CLAHE + Inpainting</p>
+            </div>
+            <div class="support-item">
+              <span class="badge-purple">✓ Ảnh Nghiêng</span>
+              <p>Trang chụp xiên/nghiêng — perspective warp tự động</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Toast container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/assets/js/app.js"></script>
+</body>
+</html>

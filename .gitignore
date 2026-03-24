@@ -1,0 +1,33 @@
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual env ───────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Environment ───────────────────────────────────────────────
+.env
+
+# ── Runtime data ──────────────────────────────────────────────
+uploads/
+results/
+*.db
+*.sqlite
+
+# ── OCR model caches ──────────────────────────────────────────
+~/.paddleocr/
+~/.EasyOCR/
+.paddleocr/
+
+# ── Misc ──────────────────────────────────────────────────────
+*.log
+.DS_Store
+.vscode/settings.json
+*.tmp
