@@ -126,61 +126,64 @@ function startWebSocket(wsPath, jobId) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${proto}//${location.host}${wsPath}`;
   let ws;
-  let reconnectDelay = 1000;
-  let reconnectTimer;
+  let wsClosed = false;
 
-  function connect() {
-    ws = new WebSocket(wsUrl);
-
-    ws.addEventListener('open', () => {
-      console.log('[WS] Connected to', wsUrl);
-      reconnectDelay = 1000;   // reset backoff on success
-    });
-
-    ws.addEventListener('message', (event) => {
-      try {
-        const raw = event.data;
-        let msg;
-        // SSE-formatted message: "data: {...}\n\n"
-        if (typeof raw === 'string' && raw.startsWith('data:')) {
-          const jsonStr = raw.replace(/^data:\s*/, '').trim();
-          msg = JSON.parse(jsonStr);
-        } else {
-          msg = JSON.parse(raw);
-        }
-        if (msg.job_id === jobId) {
-          updateJobUI(jobId, msg.status, msg.current_step, msg.progress_pct);
-          if (msg.status === 'done') {
-            showToast('🎉 Trích xuất hoàn thành!', 'success');
-            loadResults(jobId);
-            loadStats();
-            closeWs();
-          } else if (msg.status === 'failed') {
-            showToast(`❌ Xử lý thất bại: ${msg.error || 'Lỗi không xác định'}`, 'error');
-            closeWs();
-          }
-        }
-      } catch (_) {}
-    });
-
-    ws.addEventListener('close', () => {
-      // Fall back to polling if WS drops
-      console.warn('[WS] Disconnected, falling back to polling');
-      clearTimeout(reconnectTimer);
-      startPolling(jobId);
-    });
-
-    ws.addEventListener('error', () => {
+  // Safety: if WebSocket fails to connect within 3s, fall back to polling
+  const connectTimer = setTimeout(() => {
+    if (ws && ws.readyState !== WebSocket.OPEN) {
       ws.close();
-    });
-  }
+    }
+  }, 3000);
 
-  function closeWs() {
-    clearTimeout(reconnectTimer);
-    if (ws) ws.close();
-  }
+  ws = new WebSocket(wsUrl);
 
-  connect();
+  ws.addEventListener('open', () => {
+    console.log('[WS] Connected to', wsUrl);
+    clearTimeout(connectTimer);
+  });
+
+  ws.addEventListener('message', (event) => {
+    try {
+      const raw = event.data;
+      let msg;
+      // SSE-formatted: "data: {...}\n\n"
+      if (typeof raw === 'string' && raw.startsWith('data:')) {
+        const jsonStr = raw.replace(/^data:\s*/, '').trim();
+        msg = JSON.parse(jsonStr);
+      } else {
+        msg = JSON.parse(raw);
+      }
+      if (msg.job_id === jobId) {
+        updateJobUI(jobId, msg.status, msg.current_step, msg.progress_pct);
+        if (msg.status === 'done') {
+          wsClosed = true;
+          ws.close();
+          showToast('🎉 Trích xuất hoàn thành!', 'success');
+          loadResults(jobId);
+          loadStats();
+          stopPolling(jobId);
+        } else if (msg.status === 'failed') {
+          wsClosed = true;
+          ws.close();
+          stopPolling(jobId);
+          showToast(`❌ Xử lý thất bại: ${msg.error || 'Lỗi không xác định'}`, 'error');
+        }
+      }
+    } catch (_) {}
+  });
+
+  ws.addEventListener('close', () => {
+    clearTimeout(connectTimer);
+    if (!wsClosed) {
+      // WS dropped unexpectedly — fall back to polling
+      console.warn('[WS] Disconnected, falling back to polling');
+      startPolling(jobId);
+    }
+  });
+
+  ws.addEventListener('error', () => {
+    ws.close();
+  });
 }
 
 // ── Jobs panel ────────────────────────────────────────────────
@@ -263,6 +266,12 @@ function startPolling(jobId) {
   window._pollTimers[jobId] = setInterval(() => pollStatus(jobId), 1500);
 }
 
+function stopPolling(jobId) {
+  if (!window._pollTimers || !window._pollTimers[jobId]) return;
+  clearInterval(window._pollTimers[jobId]);
+  delete window._pollTimers[jobId];
+}
+
 async function pollStatus(jobId) {
   try {
     const r = await fetch(`${API}/api/jobs/${jobId}/status`);
@@ -271,14 +280,12 @@ async function pollStatus(jobId) {
     updateJobUI(jobId, data.status, data.current_step, data.progress_pct);
 
     if (data.status === 'done') {
-      clearInterval(window._pollTimers[jobId]);
-      delete window._pollTimers[jobId];
+      stopPolling(jobId);
       showToast('🎉 Trích xuất hoàn thành!', 'success');
       await loadResults(jobId);
       loadStats();
     } else if (data.status === 'failed') {
-      clearInterval(window._pollTimers[jobId]);
-      delete window._pollTimers[jobId];
+      stopPolling(jobId);
       showToast(`❌ Xử lý thất bại: ${data.error || 'Lỗi không xác định'}`, 'error');
     }
   } catch (_) {}
@@ -341,26 +348,35 @@ function renderResults(jobId, data) {
   tbody.innerHTML = '';
   let calculatedTotal = 0;
 
-  doc.items.forEach((item, idx) => {
-    const conf = item.confidence || 0;
-    const confClass = conf >= 0.85 ? 'conf-high' : conf >= 0.6 ? 'conf-medium' : 'conf-low';
-    const confLabel = Math.round(conf * 100) + '%';
-
-    if (item.thanh_tien) calculatedTotal += item.thanh_tien;
-
+  if (!doc.items || doc.items.length === 0) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${item.stt || idx + 1}</td>
-      <td><code>${escHtml(item.ma_sp || '—')}</code></td>
-      <td>${escHtml(item.ten_sp)}</td>
-      <td>${escHtml(item.dvt || '—')}</td>
-      <td class="money">${fmtNum(item.so_luong)}</td>
-      <td class="money">${fmtMoney(item.don_gia, doc.don_vi_tien)}</td>
-      <td class="money">${fmtMoney(item.thanh_tien, doc.don_vi_tien)}</td>
-      <td style="max-width:140px;color:var(--text-secondary)">${escHtml(item.ghi_chu || '')}</td>
-      <td><span class="conf-badge ${confClass}">${confLabel}</span></td>`;
+    tr.innerHTML = `<td colspan="9" style="text-align:center;color:var(--text-secondary);padding:32px">
+      ⚠️ Không tìm thấy sản phẩm nào trong file này.<br>
+      <small>Vui lòng thử file báo giá/bảng giá có cấu trúc bảng.</small>
+    </td>`;
     tbody.appendChild(tr);
-  });
+  } else {
+    doc.items.forEach((item, idx) => {
+      const conf = item.confidence || 0;
+      const confClass = conf >= 0.85 ? 'conf-high' : conf >= 0.6 ? 'conf-medium' : 'conf-low';
+      const confLabel = Math.round(conf * 100) + '%';
+
+      if (item.thanh_tien) calculatedTotal += item.thanh_tien;
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${item.stt || idx + 1}</td>
+        <td><code>${escHtml(item.ma_sp || '—')}</code></td>
+        <td>${escHtml(item.ten_sp)}</td>
+        <td>${escHtml(item.dvt || '—')}</td>
+        <td class="money">${fmtNum(item.so_luong)}</td>
+        <td class="money">${fmtMoney(item.don_gia, doc.don_vi_tien)}</td>
+        <td class="money">${fmtMoney(item.thanh_tien, doc.don_vi_tien)}</td>
+        <td style="max-width:140px;color:var(--text-secondary)">${escHtml(item.ghi_chu || '')}</td>
+        <td><span class="conf-badge ${confClass}">${confLabel}</span></td>`;
+      tbody.appendChild(tr);
+    });
+  }
 
   totalItems = doc.items.length;
   document.getElementById('countItems').textContent = totalItems;
