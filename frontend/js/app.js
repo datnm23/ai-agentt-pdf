@@ -394,17 +394,22 @@ function renderResults(jobId, data) {
 async function doExport(format) {
   if (!currentJobId) { showToast('Chưa có kết quả để export', 'error'); return; }
 
-  if (format === 'json') {
-    const r = await fetch(`${API}/api/export/${currentJobId}?format=json`);
+  const ext = format === 'excel' ? 'xlsx' : format === 'csv' ? 'csv' : 'json';
+  const filename = `baogia_${currentJobId}.${ext}`;
+
+  try {
+    const r = await fetch(`${API}/api/export/${currentJobId}?format=${format}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: 'Lỗi không xác định' }));
+      showToast(`❌ Export thất bại: ${err.detail}`, 'error');
+      return;
+    }
     const blob = await r.blob();
-    downloadBlob(blob, `baogia_${currentJobId}.json`);
-  } else {
-    const link = document.createElement('a');
-    link.href = `${API}/api/export/${currentJobId}?format=${format}`;
-    link.download = `baogia_${currentJobId}.${format === 'excel' ? 'xlsx' : 'csv'}`;
-    link.click();
+    downloadBlob(blob, filename);
+    showToast(`📥 Đã tải ${filename}`, 'success');
+  } catch (e) {
+    showToast(`❌ Export lỗi: ${e.message}`, 'error');
   }
-  showToast(`📥 Đang tải xuống ${format.toUpperCase()}...`, 'success');
 }
 
 function downloadBlob(blob, filename) {

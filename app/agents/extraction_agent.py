@@ -16,28 +16,99 @@ MAX_RETRIES = 3
 BASE_BACKOFF_SECS = 2.0
 
 EXTRACTION_SYSTEM_PROMPT = """Bạn là chuyên gia phân tích bảng giá/báo giá của các doanh nghiệp Việt Nam.
-Nhiệm vụ của bạn là trích xuất thông tin từ văn bản OCR của một bảng báo giá.
+Nhiệm vụ: trích xuất TẤT CẢ thông tin từ bảng báo giá — header, items, và footer.
 
-QUY TẮC QUAN TRỌNG:
-1. Trích xuất ĐÚNG và ĐẦY ĐỦ tất cả sản phẩm/dịch vụ trong bảng
-2. Chuẩn hóa giá tiền: loại bỏ dấu chấm phân cách hàng nghìn, giữ số nguyên
-   - "1.200.000" → 1200000  |  "1,200,000" → 1200000  |  "1.2K" → 1200
-3. Đơn vị tiền mặc định là VND nếu không ghi rõ
-4. Nếu có cột "Thành tiền" nhưng không có "Đơn giá × Số lượng", hãy điền vào thanh_tien
-5. Bỏ qua các dòng tổng cộng/subtotal (chúng là tong_chua_vat, tong_sau_vat)
-6. Nếu văn bản bị lỗi OCR nhẹ (ký tự sai), hãy đọc theo ngữ cảnh và tự sửa
-7. confidence: 1.0 = chắc chắn, 0.5 = không chắc, 0.3 = đoán
+═══════════════════════════════════════════════════════════════════════════════
+PHÂN LOẠI TÀI LIỆU (ĐỌC TRƯỚC KHI TRÍCH XUẤT):
+═══════════════════════════════════════════════════════════════════════════════
+- Nếu thấy "BẢNG GIÁ", "Price List", "Catalog", "Bảng Báo Giá Sản Phẩm" → loai_tai_lieu = "price_list"
+  → KHÔNG tính tổng tiền, KHÔNG cộng dồn, so_luong = null (vì đây là bảng tra cứu giá, không phải đơn hàng)
+- Nếu thấy "BÁO GIÁ", "Quotation", "Phiếu Báo Giá" → loai_tai_lieu = "quote"
+  → Có thể tính tổng nếu có số lượng cụ thể
+- Nếu thấy "HÓA ĐƠN", "Invoice", "Phiếu Xuất Kho" → loai_tai_lieu = "invoice"
+  → Bắt buộc có tổng tiền
 
-NHẬN DIỆN HEADER BẢNG (tất cả biến thể phổ biến):
-- STT, No., #
-- Mã hàng, Mã SP, Code, Part No
-- Tên hàng, Tên SP, Mô tả, Description, Item
-- ĐVT, Đơn vị, Unit, UOM
-- Số lượng, SL, Qty, Quantity
-- Đơn giá, Giá, Unit Price, Rate
-- Thành tiền, Tổng, Amount, Total
-- Chiết khấu, CK, Discount
-- Ghi chú, Note, Remarks"""
+═══════════════════════════════════════════════════════════════════════════════
+HEADER (đọc kỹ đầu tài liệu):
+═══════════════════════════════════════════════════════════════════════════════
+- nha_cung_cap: Tên công ty báo giá (VD: "CÔNG TY CỔ PHẦN ĐÔNG GIANG")
+- dia_chi: Địa chỉ công ty (đường, quận, thành phố)
+- dien_thoai: Số điện thoại liên hệ (nhiều số nếu có)
+- email: Email công ty
+- so_bao_gia: Số báo giá / Số chứng từ
+- ngay_bao_gia: Ngày lập báo giá (dd/mm/yyyy) — TÌM pattern: "hiệu lực từ ngày", "áp dụng từ", "kể từ ngày"
+- ngay_het_han: Ngày hết hạn báo giá
+- khach_hang: Tên khách hàng / đơn vị nhận báo giá
+- don_vi_tien: Đơn vị tiền tệ (VND, USD, EUR)
+
+═══════════════════════════════════════════════════════════════════════════════
+NHÓM SẢN PHẨM (Stateful Parsing - RẤT QUAN TRỌNG):
+═══════════════════════════════════════════════════════════════════════════════
+- Khi gặp dòng IN ĐẬM / IN HOA đứng độc lập trước bảng → đây là TÊN NHÓM SẢN PHẨM
+  VD: "DÂY ĐIỆN 1 LÕI RUỘT MỀM", "CÁP ĐIỀU KHIỂN", "DÂY CÁP ĐỒNG TRẦN"
+- Lưu nhóm này vào trường nhom_sp cho TẤT CẢ sản phẩm bên dưới cho đến khi gặp nhóm mới
+- VD: Dòng "1 x 1.5" thuộc nhóm "DÂY ĐIỆN 1 LÕI RUỘT MỀM" → nhom_sp = "DÂY ĐIỆN 1 LÕI RUỘT MỀM"
+
+═══════════════════════════════════════════════════════════════════════════════
+ITEMS (đọc kỹ từng dòng trong bảng):
+═══════════════════════════════════════════════════════════════════════════════
+- **nhom_sp: Nhóm sản phẩm** — từ dòng tiêu đề nhóm gần nhất (xem phần trên)
+- **ma_sp: Mã sản phẩm / mã hàng** — TUYỆT ĐỐI không bỏ sót! Tìm trong các cột:
+  ┌────────────────────────────────────────────────────────────────┐
+  │ "Mã SP", "Mã hàng", "Code", "Part No", "SKU", "Ký hiệu",      │
+  │ "Product Symbol", "Item Code", "Model", "Part Number"          │
+  └────────────────────────────────────────────────────────────────┘
+  VD: Cột "Ký hiệu" có giá trị "CV 0.5R5-0.3" → ma_sp = "CV 0.5R5-0.3"
+- **ten_sp: Tên sản phẩm** — BẮT BUỘC, giữ nguyên KHÔNG viết tắt
+  - VD đúng: "DÂY CÁP ĐIỆN VDeb VCmt 1×2.5mm² ruột đồng 7 sợi"
+  - VD sai: "cáp" hoặc "dây" (VIẾT TẮT QUÁ)
+- **dvt: Đơn vị tính** — trích xuất từ cột ĐVT
+  - Cable/wire: "m" (mét) | Kg: "kg" | Bottle: "chai" | Box: "hộp" | Set: "bộ" | Roll: "cuộn"
+- **don_gia: Đơn giá chính** (bỏ dấu chấm phẩy: "1.200.000" → 1200000)
+- **dvt_2: Đơn vị tính thứ 2** — nếu bảng có nhiều cột đơn giá (VD: "VND/kg" bên cạnh "VND/m")
+- **don_gia_2: Đơn giá thứ 2** — giá theo đơn vị thứ 2
+- **vat_pct: % VAT của dòng này** — đọc từ header cột hoặc ghi chú nhóm
+  VD: Header "Đơn giá (Đã có 8% VAT)" → vat_pct = 8
+- so_luong: Số lượng — nếu loai_tai_lieu = "price_list" → null
+- thanh_tien: Thành tiền — nếu loai_tai_lieu = "price_list" → null
+- stt: Số thứ tự liên tục 1→N trong toàn bộ tài liệu (KHÔNG reset mỗi trang)
+- ghi_chu: Ghi chú (xuất xứ, quy cách, bảo hành...)
+
+═══════════════════════════════════════════════════════════════════════════════
+BẢNG CÓ NHIỀU CỘT ĐƠN GIÁ (Dynamic Columns):
+═══════════════════════════════════════════════════════════════════════════════
+VD header: | Tiết diện | Ký hiệu | Đơn giá VND/m | Đơn giá VND/kg |
+→ don_gia = giá VND/m, dvt = "m"
+→ don_gia_2 = giá VND/kg, dvt_2 = "kg"
+
+═══════════════════════════════════════════════════════════════════════════════
+THUẾ VAT (Xác định chính xác):
+═══════════════════════════════════════════════════════════════════════════════
+- Đọc header cột: "Đơn giá (Đã có 8% VAT)" → gia_da_bao_gom_vat = true, thue_vat_pct = 8
+- Nếu ghi "Giá chưa VAT" hoặc không ghi gì → gia_da_bao_gom_vat = false
+- Nếu mỗi nhóm sản phẩm có VAT khác nhau → ghi vat_pct cho từng dòng item
+- VD: Dây cáp bọc = 8%, Cáp đồng trần = 10%
+
+═══════════════════════════════════════════════════════════════════════════════
+FOOTER (đọc kỹ cuối tài liệu):
+═══════════════════════════════════════════════════════════════════════════════
+- tong_chua_vat: Tổng tiền chưa VAT — NẾU loai_tai_lieu = "price_list" → null
+- thue_vat_pct: % VAT chung (thường 8 hoặc 10)
+- thue_vat_tien: Tiền VAT = tong_chua_vat × thue_vat_pct / 100
+- tong_sau_vat: Tổng tiền sau VAT
+- dieu_kien_thanh_toan: Điều kiện thanh toán (VD: "CK 5% sau 30 ngày")
+- thoi_gian_giao_hang: Thời gian giao hàng
+- bao_hanh: Thời hạn bảo hành
+- ghi_chu_chung: Ghi chú chung
+
+═══════════════════════════════════════════════════════════════════════════════
+NHẬN DIỆN CỘT (tất cả biến thể):
+═══════════════════════════════════════════════════════════════════════════════
+STT | No.# | Mã hàng.Code.Ký hiệu.Symbol | Tên hàng.Tên SP.Mô tả.Item.Tiết diện |
+ĐVT.Đơn vị.Unit | Số lượng.SL.Qty | Đơn giá.Giá.Unit Price.Rate.VND/m.VND/kg |
+Thành tiền.Tổng.Amount.Total | Ghi chú.Note
+
+confidence: 1.0=chắc chắn, 0.7-0.9=bình thường, <0.7=cần kiểm tra"""
 
 
 class ExtractionAgent:
@@ -76,7 +147,8 @@ class ExtractionAgent:
 
         # Short text — single call
         if total_chars <= MAX_CHARS_PER_CHUNK:
-            return self._extract_chunk(ocr_text, filename, chunk_index=0, total_chunks=1)
+            doc = self._extract_chunk(ocr_text, filename, chunk_index=0, total_chunks=1)
+            return self._post_process(doc)
 
         # Long text — paginate across chunks
         chunks = self._split_text(ocr_text)
@@ -85,7 +157,8 @@ class ExtractionAgent:
             doc = self._extract_chunk(chunk, filename, chunk_index=i + 1, total_chunks=len(chunks))
             all_docs.append(doc)
 
-        return self._merge_documents(all_docs)
+        merged = self._merge_documents(all_docs)
+        return self._post_process(merged)
 
     def extract_from_image(self, image_path: Path) -> PriceDocument:
         """
@@ -109,12 +182,21 @@ class ExtractionAgent:
 
         prompt = f"""{EXTRACTION_SYSTEM_PROMPT}
 
-Nhìn vào hình ảnh bảng báo giá và trích xuất thông tin. Trả về JSON:
+ĐÂY LÀ HÌNH ẢNH. Nhìn kỹ TỪNG GÓC của trang:
+- Phần đầu: logo, tên công ty, địa chỉ, điện thoại, email, số báo giá, ngày
+- Phần giữa: bảng sản phẩm — đọc TẤT CẢ các dòng, mỗi cột
+- Phần cuối: tổng cộng, VAT, điều kiện thanh toán, giao hàng, bảo hành
+
+Trả về JSON đầy đủ:
 {{
-  "nha_cung_cap": "...", "so_bao_gia": "...", "ngay_bao_gia": "...",
+  "loai_tai_lieu": "price_list | quote | invoice",
+  "gia_da_bao_gom_vat": false,
+  "nha_cung_cap": "...", "dia_chi": "...", "dien_thoai": "...", "email": "...",
+  "so_bao_gia": "...", "ngay_bao_gia": "...", "ngay_het_han": "...",
   "khach_hang": "...", "don_vi_tien": "VND",
-  "items": [{{"stt": 1, "ten_sp": "...", "dvt": "...", "so_luong": 1, "don_gia": 0, "thanh_tien": 0, "confidence": 0.9}}],
-  "tong_chua_vat": null, "thue_vat_pct": 10, "tong_sau_vat": null
+  "items": [{{"stt":1,"nhom_sp":"...","ma_sp":"...","ten_sp":"...","dvt":"m","so_luong":null,"don_gia":0,"dvt_2":null,"don_gia_2":null,"thanh_tien":null,"vat_pct":null,"ghi_chu":"...","confidence":0.9}}],
+  "tong_chua_vat": null, "thue_vat_pct": 10, "thue_vat_tien": null, "tong_sau_vat": null,
+  "dieu_kien_thanh_toan": "...", "thoi_gian_giao_hang": "...", "bao_hanh": "...", "ghi_chu_chung": "..."
 }}"""
 
         response = model.generate_content([
@@ -132,7 +214,9 @@ Nhìn vào hình ảnh bảng báo giá và trích xuất thông tin. Trả về
         from langchain_core.messages import HumanMessage, SystemMessage
 
         chunk_note = f" (trang {chunk_index}/{total_chunks})" if total_chunks > 1 else ""
-        user_prompt = f"""Trích xuất thông tin bảng báo giá từ văn bản OCR sau đây.
+        user_prompt = f"""⚠️ ĐỌC KỸ TOÀN BỘ văn bản. Tìm thông tin công ty, địa chỉ, điện thoại, email ở ĐẦU trang. Tìm tổng cộng, VAT, điều kiện thanh toán ở CUỐI trang.
+
+Trích xuất thông tin bảng báo giá từ văn bản OCR sau đây.
 File: {filename}{chunk_note}
 
 === NỘI DUNG OCR ===
@@ -141,29 +225,39 @@ File: {filename}{chunk_note}
 
 Trả về JSON ĐÚNG định dạng sau (không giải thích thêm):
 {{
+  "loai_tai_lieu": "price_list | quote | invoice (XÁC ĐỊNH TỪ TIÊU ĐỀ TÀI LIỆU)",
+  "gia_da_bao_gom_vat": false,
   "nha_cung_cap": "Tên công ty báo giá hoặc null",
+  "dia_chi": "Địa chỉ công ty hoặc null",
+  "dien_thoai": "Điện thoại hoặc null",
+  "email": "Email hoặc null",
   "so_bao_gia": "Số báo giá hoặc null",
-  "ngay_bao_gia": "dd/mm/yyyy hoặc null",
+  "ngay_bao_gia": "dd/mm/yyyy hoặc null — TÌM 'hiệu lực từ ngày', 'áp dụng từ'",
+  "ngay_het_han": "dd/mm/yyyy hoặc null",
   "khach_hang": "Tên khách hàng hoặc null",
   "don_vi_tien": "VND hoặc USD hoặc EUR",
   "items": [
     {{
       "stt": 1,
-      "ma_sp": "Mã SP hoặc null",
-      "ten_sp": "Tên sản phẩm bắt buộc",
-      "dvt": "Đơn vị hoặc null",
-      "so_luong": 1.0,
+      "nhom_sp": "TÊN NHÓM SẢN PHẨM từ dòng in đậm/in hoa phía trên (VD: DÂY ĐIỆN 1 LÕI RUỘT MỀM)",
+      "ma_sp": "Mã SP / Ký hiệu / Code / Part No — TUYỆT ĐỐI không bỏ sót!",
+      "ten_sp": "Tên sản phẩm BẮT BUỘC, giữ nguyên KHÔNG viết tắt",
+      "dvt": "Đơn vị tính chính (m, kg, cái...)",
+      "so_luong": "null nếu price_list, số lượng nếu quote/invoice",
       "don_gia": 100000.0,
-      "thanh_tien": 100000.0,
+      "dvt_2": "Đơn vị thứ 2 nếu có (VD: kg khi có cột VND/kg)",
+      "don_gia_2": "Giá theo đơn vị thứ 2 nếu có",
+      "thanh_tien": "null nếu price_list",
+      "vat_pct": "% VAT của dòng này nếu khác VAT chung",
       "chiet_khau_pct": null,
       "ghi_chu": null,
       "confidence": 0.95
     }}
   ],
-  "tong_chua_vat": null,
+  "tong_chua_vat": "null nếu price_list",
   "thue_vat_pct": 10.0,
-  "thue_vat_tien": null,
-  "tong_sau_vat": null,
+  "thue_vat_tien": "null nếu price_list",
+  "tong_sau_vat": "null nếu price_list",
   "dieu_kien_thanh_toan": null,
   "thoi_gian_giao_hang": null,
   "bao_hanh": null,
@@ -231,22 +325,29 @@ Trả về JSON ĐÚNG định dạng sau (không giải thích thêm):
 
     @staticmethod
     def _merge_documents(docs: list[PriceDocument]) -> PriceDocument:
-        """Merge metadata from the first doc with items from all chunks."""
+        """Merge metadata from the first doc with items from all chunks.
+
+        Deduplicates using a composite key (ten_sp, don_gia) so that the same
+        product name appearing on different pages with different prices is NOT
+        treated as a duplicate — they are distinct line items.
+        """
         if not docs:
             return PriceDocument(don_vi_tien="VND", items=[])
 
         base = docs[0]
         merged_items: list[PriceItem] = []
-        seen_sps: set[str] = set()
+        # Composite key: name + price distinguishes same-name cables with different specs
+        seen_keys: set[tuple[str, float]] = set()
 
         for doc in docs:
             for item in doc.items:
-                # Deduplicate by product name
-                key = (item.ten_sp or "").strip().lower()
-                if key and key not in seen_sps:
-                    seen_sps.add(key)
+                name_key = (item.ten_sp or "").strip().lower()
+                price_key = item.don_gia or 0.0
+                key = (name_key, round(price_key, 2))
+                if name_key and key not in seen_keys:
+                    seen_keys.add(key)
                     merged_items.append(item)
-                elif not key:
+                elif not name_key:
                     merged_items.append(item)
 
         logger.info(f"Merged {len(docs)} chunks → {len(merged_items)} unique items")
@@ -254,6 +355,96 @@ Trả về JSON ĐÚNG định dạng sau (không giải thích thêm):
         return base
 
     # ── Response parsing ───────────────────────────────────────
+
+    @staticmethod
+    def _post_process(doc: PriceDocument) -> PriceDocument:
+        """Fill missing fields with smart defaults — especially dvt, so_luong, thanh_tien, VAT.
+
+        For price_list documents: do NOT calculate totals or set so_luong/thanh_tien.
+        """
+        is_price_list = doc.loai_tai_lieu == "price_list"
+
+        # 1. Renumber stt globally 1..N
+        for i, item in enumerate(doc.items, 1):
+            item.stt = i
+
+        # 1b. Propagate sparse fields: inherit from the nearest previous item that has a value
+        last_group: str | None = None
+        last_dvt: str | None = None
+        last_vat_pct: float | None = None
+        for item in doc.items:
+            # nhom_sp
+            if item.nhom_sp:
+                last_group = item.nhom_sp
+            elif last_group:
+                item.nhom_sp = last_group
+            # dvt
+            if item.dvt:
+                last_dvt = item.dvt
+            elif last_dvt:
+                item.dvt = last_dvt
+            # vat_pct
+            if item.vat_pct is not None:
+                last_vat_pct = item.vat_pct
+            elif last_vat_pct is not None:
+                item.vat_pct = last_vat_pct
+
+        # 2. For price_list: clear so_luong and thanh_tien (meaningless for catalog)
+        if is_price_list:
+            for item in doc.items:
+                item.so_luong = None
+                item.thanh_tien = None
+            # Clear document-level totals too
+            doc.tong_chua_vat = None
+            doc.thue_vat_tien = None
+            doc.tong_sau_vat = None
+        else:
+            # 2b. Auto-calculate thanh_tien if missing (quote/invoice only)
+            for item in doc.items:
+                if item.so_luong is not None and item.don_gia is not None and item.thanh_tien is None:
+                    item.thanh_tien = item.so_luong * item.don_gia
+
+            # 3. Default so_luong=1.0 for per-unit price items (no quantity column) — quote/invoice only
+            for item in doc.items:
+                if item.so_luong is None and item.don_gia is not None:
+                    item.so_luong = 1.0
+
+        # 4. Infer dvt from product name when missing — key for cable/electrical items
+        unit_map = [
+            # Cable / wire
+            ("dây", "m"), ("day", "m"), ("cáp", "m"), ("cap", "m"),
+            ("wire", "m"), ("cable", "m"), ("đây điện", "m"),
+            ("dây cáp", "m"), ("dây dẫn", "m"),
+            # Others
+            ("ổ cắm", "cái"), ("công tắc", "cái"), ("bóng", "cái"), ("đèn", "cái"),
+            ("vit", "bộ"), ("ống", "m"), ("ruột", "m"),
+            ("bình", "cái"), ("máy", "cái"), ("thiết bị", "cái"),
+        ]
+        for item in doc.items:
+            if item.dvt is None and item.ten_sp:
+                name_lower = item.ten_sp.lower()
+                for kw, inferred_unit in unit_map:
+                    if kw in name_lower:
+                        item.dvt = inferred_unit
+                        break
+
+        # 5. Auto-calculate VAT totals — ONLY for quote/invoice, NOT for price_list
+        if not is_price_list:
+            has_items = len(doc.items) > 0
+            tong_raw = doc.tong_chua_vat
+            # Treat 0 as "not extracted" so we can compute from items later
+            if has_items and (tong_raw is None or tong_raw == 0):
+                # Sum thanh_tien from all items as a fallback total
+                doc.tong_chua_vat = sum(
+                    (item.thanh_tien or 0) for item in doc.items
+                )
+            if doc.tong_chua_vat and doc.tong_chua_vat > 0 and doc.thue_vat_pct and doc.thue_vat_pct > 0:
+                if doc.thue_vat_tien is None:
+                    doc.thue_vat_tien = doc.tong_chua_vat * doc.thue_vat_pct / 100
+                if doc.tong_sau_vat is None:
+                    doc.tong_sau_vat = doc.tong_chua_vat + (doc.thue_vat_tien or 0)
+
+        return doc
 
     def _parse_response(self, content: str) -> PriceDocument:
         """Parse LLM JSON response into PriceDocument."""
@@ -280,13 +471,17 @@ Trả về JSON ĐÚNG định dạng sau (không giải thích thêm):
                 try:
                     item = PriceItem(
                         stt=item_data.get("stt"),
+                        nhom_sp=item_data.get("nhom_sp"),
                         ma_sp=item_data.get("ma_sp"),
                         ten_sp=item_data.get("ten_sp", ""),
                         dvt=item_data.get("dvt"),
                         so_luong=_safe_float(item_data.get("so_luong")),
                         don_gia=_safe_float(item_data.get("don_gia")),
+                        dvt_2=item_data.get("dvt_2"),
+                        don_gia_2=_safe_float(item_data.get("don_gia_2")),
                         thanh_tien=_safe_float(item_data.get("thanh_tien")),
                         chiet_khau_pct=_safe_float(item_data.get("chiet_khau_pct")),
+                        vat_pct=_safe_float(item_data.get("vat_pct")),
                         ghi_chu=item_data.get("ghi_chu"),
                         confidence=float(item_data.get("confidence", 0.8)),
                     )
@@ -299,9 +494,15 @@ Trả về JSON ĐÚNG định dạng sau (không giải thích thêm):
                     logger.warning(f"Skipping malformed item: {e}")
 
             doc = PriceDocument(
+                loai_tai_lieu=data.get("loai_tai_lieu"),
+                gia_da_bao_gom_vat=data.get("gia_da_bao_gom_vat", False),
                 nha_cung_cap=data.get("nha_cung_cap"),
+                dia_chi=data.get("dia_chi"),
+                dien_thoai=data.get("dien_thoai"),
+                email=data.get("email"),
                 so_bao_gia=data.get("so_bao_gia"),
                 ngay_bao_gia=data.get("ngay_bao_gia"),
+                ngay_het_han=data.get("ngay_het_han"),
                 khach_hang=data.get("khach_hang"),
                 don_vi_tien=data.get("don_vi_tien", "VND"),
                 items=items,
@@ -315,6 +516,8 @@ Trả về JSON ĐÚNG định dạng sau (không giải thích thêm):
                 ghi_chu_chung=data.get("ghi_chu_chung"),
             )
             logger.info(f"Extracted {len(items)} items successfully.")
+            # NOTE: do NOT call _post_process here — tong_chua_vat is per-page (0 or meaningless)
+            # _post_process will be called once on the merged document instead
             return doc
 
         except Exception as e:

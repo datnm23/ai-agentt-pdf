@@ -169,11 +169,28 @@ async def upload_file(
 
 
 async def _run_with_ws(job_id: str, file_path: Path, filename: str):
-    """Wrapper that pushes WebSocket updates after each pipeline step."""
+    """Run pipeline + push WS updates every 2s while processing is running."""
     try:
-        await process_document(job_id, file_path, filename)
-    finally:
-        # Notify all WS clients the job is done/failed
+        # Start pipeline in background
+        pipeline_task = asyncio.create_task(
+            process_document(job_id, file_path, filename)
+        )
+
+        # Poll job status and push WS updates while pipeline runs
+        while not pipeline_task.done():
+            await asyncio.sleep(2)
+            async with AsyncSessionLocal() as session:
+                record = await get_job(session, job_id)
+            if record and record.status not in ("done", "failed"):
+                await _manager.send_update(job_id, {
+                    "job_id": job_id,
+                    "status": record.status,
+                    "current_step": record.current_step,
+                    "progress_pct": record.progress_pct,
+                })
+
+        # Pipeline finished — await result and push final state
+        await pipeline_task
         async with AsyncSessionLocal() as session:
             record = await get_job(session, job_id)
         if record:
@@ -183,6 +200,9 @@ async def _run_with_ws(job_id: str, file_path: Path, filename: str):
                 "current_step": record.current_step,
                 "progress_pct": record.progress_pct,
             })
+
+    except Exception:
+        logger.exception(f"[WS runner] job {job_id} failed unexpectedly")
 
 
 # ── WebSocket (real-time status) ─────────────────────────────────

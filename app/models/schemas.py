@@ -38,20 +38,33 @@ class JobStatus(str, Enum):
 class PriceItem(BaseModel):
     """Một dòng sản phẩm trong bảng giá."""
     stt: Optional[int] = Field(None, description="Số thứ tự")
+    nhom_sp: Optional[str] = Field(None, description="Nhóm/danh mục sản phẩm (VD: DÂY ĐIỆN 1 LÕI)")
     ma_sp: Optional[str] = Field(None, description="Mã sản phẩm")
     ten_sp: str = Field(description="Tên sản phẩm / dịch vụ")
     dvt: Optional[str] = Field(None, description="Đơn vị tính (cái, m, kg...)")
     so_luong: Optional[float] = Field(None, description="Số lượng")
     don_gia: Optional[float] = Field(None, description="Đơn giá (VND hoặc ngoại tệ)")
+    dvt_2: Optional[str] = Field(None, description="Đơn vị tính thứ 2 (VD: kg)")
+    don_gia_2: Optional[float] = Field(None, description="Đơn giá thứ 2 (VD: VND/kg)")
     thanh_tien: Optional[float] = Field(None, description="Thành tiền = SL × Đơn giá")
     chiet_khau_pct: Optional[float] = Field(None, description="Chiết khấu %")
     chiet_khau_tien: Optional[float] = Field(None, description="Chiết khấu tiền")
+    vat_pct: Optional[float] = Field(None, description="% VAT của dòng sản phẩm này")
     ghi_chu: Optional[str] = Field(None, description="Ghi chú, xuất xứ, bảo hành...")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Độ tin cậy 0-1")
 
 
+class DocumentCategory(str, Enum):
+    """Phân loại tài liệu."""
+    PRICE_LIST = "price_list"  # Bảng giá (không tính tổng)
+    QUOTE = "quote"            # Báo giá (có thể tính tổng)
+    INVOICE = "invoice"        # Hóa đơn (bắt buộc có tổng)
+
+
 class PriceDocument(BaseModel):
     """Toàn bộ thông tin một bảng báo giá."""
+    loai_tai_lieu: Optional[str] = Field(None, description="price_list | quote | invoice")
+    gia_da_bao_gom_vat: bool = Field(default=False, description="Giá đã bao gồm VAT?")
     nha_cung_cap: Optional[str] = Field(None, description="Tên công ty / nhà cung cấp")
     dia_chi: Optional[str] = None
     dien_thoai: Optional[str] = None
