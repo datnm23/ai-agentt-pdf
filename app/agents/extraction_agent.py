@@ -48,6 +48,9 @@ NHÓM SẢN PHẨM (Stateful Parsing - RẤT QUAN TRỌNG):
   VD: "DÂY ĐIỆN 1 LÕI RUỘT MỀM", "CÁP ĐIỀU KHIỂN", "DÂY CÁP ĐỒNG TRẦN"
 - Lưu nhóm này vào trường nhom_sp cho TẤT CẢ sản phẩm bên dưới cho đến khi gặp nhóm mới
 - VD: Dòng "1 x 1.5" thuộc nhóm "DÂY ĐIỆN 1 LÕI RUỘT MỀM" → nhom_sp = "DÂY ĐIỆN 1 LÕI RUỘT MỀM"
+- ĐẶC BIỆT: Nếu ĐẦU TRANG có dòng "SẢN PHẨM: <tên>" hoặc "PRODUCT: <tên>" (thường in đậm/to)
+  → đó là nhom_sp cho TẤT CẢ sản phẩm trên trang, dù không có nhóm nào khác
+  VD: "SẢN PHẨM: CÁP ĐỒNG TRẦN" → nhom_sp = "CÁP ĐỒNG TRẦN" cho mọi dòng trong bảng
 
 ═══════════════════════════════════════════════════════════════════════════════
 ITEMS (đọc kỹ từng dòng trong bảng):
@@ -84,10 +87,12 @@ VD header: | Tiết diện | Ký hiệu | Đơn giá VND/m | Đơn giá VND/kg |
 ═══════════════════════════════════════════════════════════════════════════════
 THUẾ VAT (Xác định chính xác):
 ═══════════════════════════════════════════════════════════════════════════════
-- Đọc header cột: "Đơn giá (Đã có 8% VAT)" → gia_da_bao_gom_vat = true, thue_vat_pct = 8
+- Đọc header cột đơn giá: "Đã có 8% VAT" → vat_pct = 8 cho TẤT CẢ dòng trong bảng đó
+- Đọc header cột đơn giá: "Đã có 10% VAT" → vat_pct = 10 cho TẤT CẢ dòng trong bảng đó
+- TUYỆT ĐỐI KHÔNG để vat_pct = null nếu đã thấy % VAT trong header cột
 - Nếu ghi "Giá chưa VAT" hoặc không ghi gì → gia_da_bao_gom_vat = false
-- Nếu mỗi nhóm sản phẩm có VAT khác nhau → ghi vat_pct cho từng dòng item
-- VD: Dây cáp bọc = 8%, Cáp đồng trần = 10%
+- Nếu mỗi nhóm/trang có VAT khác nhau → ghi vat_pct đúng cho từng dòng item
+- VD: Dây cáp bọc (trang 1–13) = 8%, Cáp đồng trần (trang 14) = 10%
 
 ═══════════════════════════════════════════════════════════════════════════════
 FOOTER (đọc kỹ cuối tài liệu):
@@ -357,10 +362,36 @@ Trả về JSON ĐÚNG định dạng sau (không giải thích thêm):
     # ── Response parsing ───────────────────────────────────────
 
     @staticmethod
-    def _post_process(doc: PriceDocument) -> PriceDocument:
+    def _inherit_sparse_fields(doc: PriceDocument) -> None:
+        """Propagate nhom_sp, dvt, vat_pct from the nearest previous item that has a value.
+
+        Mutates in-place. Call per-page BEFORE merging to prevent cross-page contamination.
+        For text-based extraction it is called inside _post_process instead.
+        """
+        last_group: str | None = None
+        last_dvt: str | None = None
+        last_vat_pct: float | None = None
+        for item in doc.items:
+            if item.nhom_sp:
+                last_group = item.nhom_sp
+            elif last_group:
+                item.nhom_sp = last_group
+            if item.dvt:
+                last_dvt = item.dvt
+            elif last_dvt:
+                item.dvt = last_dvt
+            if item.vat_pct is not None:
+                last_vat_pct = item.vat_pct
+            elif last_vat_pct is not None:
+                item.vat_pct = last_vat_pct
+
+    @staticmethod
+    def _post_process(doc: PriceDocument, skip_field_inheritance: bool = False) -> PriceDocument:
         """Fill missing fields with smart defaults — especially dvt, so_luong, thanh_tien, VAT.
 
         For price_list documents: do NOT calculate totals or set so_luong/thanh_tien.
+        skip_field_inheritance: set True when _inherit_sparse_fields was already applied
+          per-page (scanned PDF flow) to prevent cross-page contamination.
         """
         is_price_list = doc.loai_tai_lieu == "price_list"
 
@@ -368,26 +399,9 @@ Trả về JSON ĐÚNG định dạng sau (không giải thích thêm):
         for i, item in enumerate(doc.items, 1):
             item.stt = i
 
-        # 1b. Propagate sparse fields: inherit from the nearest previous item that has a value
-        last_group: str | None = None
-        last_dvt: str | None = None
-        last_vat_pct: float | None = None
-        for item in doc.items:
-            # nhom_sp
-            if item.nhom_sp:
-                last_group = item.nhom_sp
-            elif last_group:
-                item.nhom_sp = last_group
-            # dvt
-            if item.dvt:
-                last_dvt = item.dvt
-            elif last_dvt:
-                item.dvt = last_dvt
-            # vat_pct
-            if item.vat_pct is not None:
-                last_vat_pct = item.vat_pct
-            elif last_vat_pct is not None:
-                item.vat_pct = last_vat_pct
+        # 1b. Propagate sparse fields (skip when already done per-page before merging)
+        if not skip_field_inheritance:
+            ExtractionAgent._inherit_sparse_fields(doc)
 
         # 2. For price_list: clear so_luong and thanh_tien (meaningless for catalog)
         if is_price_list:

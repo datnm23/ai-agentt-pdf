@@ -161,11 +161,15 @@ async def process_document(job_id: str, file_path: Path, filename: str):
                             None, agent.extract_from_image, img_path
                         )
                         if doc.items:
+                            # Scope inheritance to this page before merging —
+                            # prevents nhom_sp/vat_pct from page N contaminating page N+1
+                            ExtractionAgent._inherit_sparse_fields(doc)
                             all_docs.append(doc)
 
                     if all_docs:
                         doc = _merge_documents(all_docs)
-                        doc = ExtractionAgent._post_process(doc)
+                        # skip_field_inheritance=True: already done per-page above
+                        doc = ExtractionAgent._post_process(doc, skip_field_inheritance=True)
                         extraction_method = ExtractionMethod.GEMINI_VISION
                         await _save_result(job_id, doc, extraction_method,
                                            preview_path, 0.85)
