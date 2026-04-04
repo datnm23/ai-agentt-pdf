@@ -40,48 +40,28 @@ class PriceItem(BaseModel):
     stt: Optional[int] = Field(None, description="Số thứ tự")
     nhom_sp: Optional[str] = Field(None, description="Nhóm/danh mục sản phẩm (VD: DÂY ĐIỆN 1 LÕI)")
     ma_sp: Optional[str] = Field(None, description="Mã sản phẩm")
-    ten_sp: str = Field(description="Tên sản phẩm / dịch vụ")
+    ten_sp: str = Field(description="Tên sản phẩm")
+    qui_cach: Optional[str] = Field(None, description="Quy cách / thông số kỹ thuật (VD: 1×0.5, DN15, 2×1.5mm²)")
     dvt: Optional[str] = Field(None, description="Đơn vị tính (cái, m, kg...)")
-    so_luong: Optional[float] = Field(None, description="Số lượng")
-    don_gia: Optional[float] = Field(None, description="Đơn giá (VND hoặc ngoại tệ)")
+    don_gia: Optional[float] = Field(None, description="Đơn giá chưa VAT (VND hoặc ngoại tệ)")
+    don_gia_co_vat: Optional[float] = Field(None, description="Đơn giá đã bao gồm VAT")
     dvt_2: Optional[str] = Field(None, description="Đơn vị tính thứ 2 (VD: kg)")
     don_gia_2: Optional[float] = Field(None, description="Đơn giá thứ 2 (VD: VND/kg)")
-    thanh_tien: Optional[float] = Field(None, description="Thành tiền = SL × Đơn giá")
-    chiet_khau_pct: Optional[float] = Field(None, description="Chiết khấu %")
-    chiet_khau_tien: Optional[float] = Field(None, description="Chiết khấu tiền")
     vat_pct: Optional[float] = Field(None, description="% VAT của dòng sản phẩm này")
     ghi_chu: Optional[str] = Field(None, description="Ghi chú, xuất xứ, bảo hành...")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Độ tin cậy 0-1")
 
 
-class DocumentCategory(str, Enum):
-    """Phân loại tài liệu."""
-    PRICE_LIST = "price_list"  # Bảng giá (không tính tổng)
-    QUOTE = "quote"            # Báo giá (có thể tính tổng)
-    INVOICE = "invoice"        # Hóa đơn (bắt buộc có tổng)
-
-
 class PriceDocument(BaseModel):
-    """Toàn bộ thông tin một bảng báo giá."""
-    loai_tai_lieu: Optional[str] = Field(None, description="price_list | quote | invoice")
+    """Toàn bộ thông tin một bảng giá."""
     gia_da_bao_gom_vat: bool = Field(default=False, description="Giá đã bao gồm VAT?")
     nha_cung_cap: Optional[str] = Field(None, description="Tên công ty / nhà cung cấp")
     dia_chi: Optional[str] = None
     dien_thoai: Optional[str] = None
     email: Optional[str] = None
-    so_bao_gia: Optional[str] = Field(None, description="Số báo giá / PO")
-    ngay_bao_gia: Optional[str] = Field(None, description="Ngày lập báo giá")
-    ngay_het_han: Optional[str] = Field(None, description="Ngày hết hạn báo giá")
-    khach_hang: Optional[str] = None
+    ngay_hieu_luc: Optional[str] = Field(None, description="Ngày hiệu lực bảng giá (dd/mm/yyyy)")
     don_vi_tien: str = Field(default="VND", description="Đơn vị tiền tệ")
     items: List[PriceItem] = Field(default_factory=list)
-    tong_chua_vat: Optional[float] = None
-    thue_vat_pct: Optional[float] = Field(None, description="% VAT (thường 10)")
-    thue_vat_tien: Optional[float] = None
-    tong_sau_vat: Optional[float] = None
-    dieu_kien_thanh_toan: Optional[str] = None
-    thoi_gian_giao_hang: Optional[str] = None
-    bao_hanh: Optional[str] = None
     ghi_chu_chung: Optional[str] = None
 
 

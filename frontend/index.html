@@ -134,6 +134,18 @@
             <div class="step-info"><span class="step-name">AI Trích Xuất</span><span class="step-desc">Gemini Flash phân tích</span></div>
             <div class="step-status" id="stepStatus-ai">⏸</div>
           </div>
+          <div class="pipeline-step" id="step-pass2">
+            <div class="step-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></div>
+            <div class="step-info"><span class="step-name">Kiểm Tra</span><span class="step-desc">Chuẩn hóa thông số kỹ thuật</span></div>
+            <div class="step-status" id="stepStatus-pass2">⏸</div>
+          </div>
+        </div>
+        <div class="audit-bar hidden" id="auditBar">
+          <span class="audit-item" id="auditRaw" title="Tổng dòng đọc được từ tất cả trang"></span>
+          <span class="audit-sep">→</span>
+          <span class="audit-item" id="auditMerge" title="Sau khi loại bỏ trùng lặp"></span>
+          <span class="audit-sep">→</span>
+          <span class="audit-item" id="auditPass2" title="Sau Pass 2 chuẩn hóa"></span>
         </div>
       </div>
 
@@ -159,23 +171,13 @@
 
         <!-- Summary info -->
         <div class="doc-summary" id="docSummary"></div>
+        <!-- Pipeline audit summary (shown after done) -->
+        <div class="result-audit hidden" id="resultAudit"></div>
 
-        <!-- Table -->
+        <!-- Table — thead built dynamically in renderResults() -->
         <div class="table-container">
           <table class="data-table" id="dataTable">
-            <thead>
-              <tr>
-                <th>STT</th>
-                <th>Mã SP</th>
-                <th>Tên sản phẩm / Dịch vụ</th>
-                <th>ĐVT</th>
-                <th>Số lượng</th>
-                <th>Đơn giá</th>
-                <th>Thành tiền</th>
-                <th>Ghi chú</th>
-                <th>Tin cậy</th>
-              </tr>
-            </thead>
+            <thead></thead>
             <tbody id="tableBody"></tbody>
           </table>
         </div>

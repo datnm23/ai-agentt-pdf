@@ -13,22 +13,12 @@ google-generativeai==0.8.3
 # ── PDF Processing ────────────────────────────────────────────
 pdfplumber==0.11.4
 pypdf==5.1.0
-camelot-py[cv]==0.11.0
-reportlab==4.2.5
 pdf2image==1.17.0
 Pillow==11.0.0
 
-# ── OCR Engines ───────────────────────────────────────────────
-easyocr==1.7.2
-paddleocr==2.9.1
-paddlepaddle==2.6.2
-pytesseract==0.3.13
-
-# ── Image Processing (OpenCV) ─────────────────────────────────
+# ── Image Processing (minimal) ────────────────────────────────
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
-scikit-image==0.24.0
-scipy==1.14.1
 
 # ── Data Processing ───────────────────────────────────────────
 pandas==2.2.3
@@ -46,3 +36,13 @@ httpx==0.28.1
 python-magic==0.4.27
 filetype==1.2.0
 loguru==0.7.3
+
+# ── Removed (heavy ML, ~4.5GB) ────────────────────────────────
+# easyocr==1.7.2          → torch + torchvision (~2GB)
+# paddleocr==2.9.1        → paddlepaddle (~1.5GB)
+# paddlepaddle==2.6.2
+# pytesseract==0.3.13     → needs system tesseract binary
+# camelot-py[cv]==0.11.0  → ghostscript dependency
+# reportlab==4.2.5        → PDF generation (unused in core flow)
+# scikit-image==0.24.0    → scipy + imageio (~300MB)
+# scipy==1.14.1

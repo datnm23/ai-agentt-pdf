@@ -127,11 +127,17 @@ async def process_document(job_id: str, file_path: Path, filename: str):
                               "📊 Đang trích xuất bảng...", 30)
                 parser = _get_pdf_parser()
                 tables = await asyncio.get_event_loop().run_in_executor(
-                    None, parser.extract_tables, file_path
+                    None, parser.extract_tables_best, file_path
                 )
                 if tables:
                     table_text = parser.tables_to_text(tables)
-                    extracted_text = f"{table_text}\n\n{extracted_text}"
+                    # Use tables_text only — do NOT append raw pdfplumber text.
+                    # Raw text re-extracts products with shorter/different names,
+                    # causing duplicates that survive dedup (different ten_sp, same price).
+                    # The table Markdown already contains all product rows; supplier
+                    # metadata (company name) is readable from section headers and product
+                    # brand names embedded in ten_sp values.
+                    extracted_text = table_text
                 extraction_method = ExtractionMethod.PDFPLUMBER
 
             elif doc_type == DocumentType.SCANNED_PDF:
@@ -141,7 +147,7 @@ async def process_document(job_id: str, file_path: Path, filename: str):
                 parser = _get_pdf_parser()
                 img_dir = UPLOAD_DIR / job_id / "pages"
                 image_paths = await asyncio.get_event_loop().run_in_executor(
-                    None, parser.pdf_to_images, file_path, img_dir
+                    None, parser.pdf_to_images, file_path, img_dir, 300
                 )
                 total_pages = len(image_paths)
                 logger.info(f"[{job_id}] {total_pages} pages → Gemini Vision")
@@ -150,6 +156,7 @@ async def process_document(job_id: str, file_path: Path, filename: str):
                 if image_paths:
                     agent = _get_extraction_agent()
                     all_docs: list[PriceDocument] = []
+                    _prev_nhom_sp: Optional[str] = None  # nhom_sp hint for next page
 
                     for idx, img_path in enumerate(image_paths, 1):
                         # OCR progress: 15-45% over all pages (50% budget)
@@ -158,18 +165,91 @@ async def process_document(job_id: str, file_path: Path, filename: str):
                                       f"👁️ Đang đọc trang {idx}/{total_pages}...",
                                       page_progress)
                         doc = await asyncio.get_event_loop().run_in_executor(
-                            None, agent.extract_from_image, img_path
+                            None, agent.extract_from_image, img_path, _prev_nhom_sp
                         )
+                        logger.info(f"Page {idx}/{total_pages} ({img_path.name}): {len(doc.items)} items extracted")
+
+                        # Retry with left/right image split when full-page extraction
+                        # returns nothing — handles dense multi-column layouts where
+                        # Gemini Vision misses the rightmost parallel sub-tables.
+                        if not doc.items:
+                            logger.info(f"Page {idx}: 0 items — retrying with image halves split")
+                            doc = await asyncio.get_event_loop().run_in_executor(
+                                None, agent.extract_from_image_halves, img_path, _prev_nhom_sp
+                            )
+                            logger.info(f"Page {idx} (halves): {len(doc.items)} items extracted")
+
                         if doc.items:
                             # Scope inheritance to this page before merging —
                             # prevents nhom_sp/vat_pct from page N contaminating page N+1
                             ExtractionAgent._inherit_sparse_fields(doc)
+
+                            # Guard: if ALL items on this page got the same nhom_sp that
+                            # differs from the hint, AND the page's STT sequence starts > 1
+                            # (indicating a continuation page with no new group header),
+                            # treat the new nhom_sp as a company-footer mis-assignment and
+                            # revert to _prev_nhom_sp.
+                            if _prev_nhom_sp and doc.items:
+                                page_groups = {item.nhom_sp for item in doc.items if item.nhom_sp}
+                                if len(page_groups) == 1:
+                                    sole_group = next(iter(page_groups))
+                                    # Check if this is a continuation page: first item STT > 1
+                                    first_stt = next(
+                                        (item.stt for item in doc.items if item.stt is not None),
+                                        None
+                                    )
+                                    is_continuation = first_stt is not None and first_stt > 1
+                                    if is_continuation and sole_group != _prev_nhom_sp:
+                                        logger.warning(
+                                            f"Page {idx}: continuation (STT starts at {first_stt}) "
+                                            f"but nhom_sp='{sole_group}' differs from hint "
+                                            f"'{_prev_nhom_sp}' — reverting to hint"
+                                        )
+                                        for item in doc.items:
+                                            item.nhom_sp = _prev_nhom_sp
+
+                            # Pass last nhom_sp of this page as context hint to next page.
+                            # Use reversed() to get the last item that actually has nhom_sp
+                            # (after within-page inheritance). If this page returned none,
+                            # keep the previous hint so the chain continues.
+                            _prev_nhom_sp = next(
+                                (item.nhom_sp for item in reversed(doc.items) if item.nhom_sp),
+                                _prev_nhom_sp
+                            )
                             all_docs.append(doc)
 
                     if all_docs:
+                        raw_total = sum(len(d.items) for d in all_docs)
+                        logger.info(f"[{job_id}] Stage audit — raw extracted: {raw_total} items across {len(all_docs)} pages")
+                        await _update(job_id, JobStatus.EXTRACTING,
+                                      f"🔗 Đã đọc {len(all_docs)} trang — {raw_total} dòng thô", 80)
+
                         doc = _merge_documents(all_docs)
+                        after_merge = len(doc.items)
+                        deduped = raw_total - after_merge
+                        dedup_note = f" (loại {deduped} trùng)" if deduped else ""
+                        if deduped > 0:
+                            pct = deduped / raw_total * 100
+                            msg = f"[{job_id}] Stage audit — after merge: {after_merge} items (deduped {deduped} / {pct:.0f}%)"
+                            if pct > 15:
+                                logger.warning(msg + " ⚠️ HIGH DEDUP — check for false-positive key collisions")
+                            else:
+                                logger.info(msg)
+                        await _update(job_id, JobStatus.EXTRACTING,
+                                      f"🔗 Ghép trang → {after_merge} sản phẩm{dedup_note}", 83)
+
                         # skip_field_inheritance=True: already done per-page above
                         doc = ExtractionAgent._post_process(doc, skip_field_inheritance=True)
+                        logger.info(f"[{job_id}] Stage audit — after post_process: {len(doc.items)} items")
+
+                        # Pass 2: validate & correct qui_cach / dvt / ma_sp using flash-lite
+                        await _update(job_id, JobStatus.EXTRACTING,
+                                      f"🔍 Pass 2 — chuẩn hóa {len(doc.items)} sản phẩm...", 88)
+                        doc = await agent.validate_and_correct(doc)
+                        logger.info(f"[{job_id}] Stage audit — after validate: {len(doc.items)} items")
+                        await _update(job_id, JobStatus.EXTRACTING,
+                                      f"✅ Pass 2 xong — {len(doc.items)} sản phẩm", 95)
+
                         extraction_method = ExtractionMethod.GEMINI_VISION
                         await _save_result(job_id, doc, extraction_method,
                                            preview_path, 0.85)
@@ -239,6 +319,7 @@ async def process_document(job_id: str, file_path: Path, filename: str):
             doc = await asyncio.get_event_loop().run_in_executor(
                 None, agent.extract_from_text, extracted_text, filename
             )
+            logger.info(f"[{job_id}] Stage audit — after extract: {len(doc.items)} items")
             await _update(job_id, JobStatus.EXTRACTING,
                           "💾 Đang lưu kết quả...", 95)
 
@@ -291,31 +372,43 @@ def create_job_id() -> str:
 def _merge_documents(docs: list[PriceDocument]) -> PriceDocument:
     """Merge items from multiple page-level PriceDocuments into one.
 
-    Deduplicates using a composite key (ten_sp, don_gia) so that the same
-    product name appearing on different pages with different prices is NOT
-    treated as a duplicate — they are distinct line items.
+    Deduplicates using a composite key (ten_sp, qui_cach, don_gia) so:
+    - Same product + same spec + same price on multiple pages → deduplicated (true repeat)
+    - Same product + different spec (DN15 vs DN20) → kept as distinct items
+    - Same product + same spec + different price → kept (different pricing tier)
     """
     if not docs:
         return PriceDocument(don_vi_tien="VND", items=[])
 
     base = docs[0]
     merged_items: list[PriceItem] = []
-    # Composite key: name + price distinguishes same-name cables with different specs
-    seen_keys: set[tuple[str, float]] = set()
+    seen_keys: set[tuple] = set()
 
     for doc in docs:
         for item in doc.items:
             name_key = (item.ten_sp or "").strip().lower()
-            price_key = item.don_gia or 0.0
-            key = (name_key, round(price_key, 2))
+            spec_key = (item.qui_cach or "").strip().lower()
+            price_key = round(item.don_gia or item.don_gia_co_vat or 0.0, 2)
+            key = (name_key, spec_key, price_key)
             if name_key and key not in seen_keys:
                 seen_keys.add(key)
                 merged_items.append(item)
             elif not name_key:
                 merged_items.append(item)
 
-    base.items = merged_items
+    # Re-group by nhom_sp (preserving first-occurrence order of each group).
+    # When a document is split into multiple chunks, the same nhom_sp can appear
+    # in non-consecutive positions.  A stable sort on first-seen nhom_sp index
+    # puts all items of a group together while respecting document order.
+    nhom_order: dict[str, int] = {}
+    for i, item in enumerate(merged_items):
+        nhom = item.nhom_sp or ""
+        if nhom not in nhom_order:
+            nhom_order[nhom] = i
+    merged_items.sort(key=lambda item: nhom_order.get(item.nhom_sp or "", len(merged_items)))
+
     logger.info(f"Merged {len(docs)} pages → {len(merged_items)} unique items")
+    base.items = merged_items
     return base
 
 

@@ -62,8 +62,11 @@ ai-agentt-pdf/
 ## Environment Variables
 
 ```env
-GOOGLE_API_KEY=your_gemini_key
-GEMINI_MODEL=gemini-2.0-flash
+GOOGLE_API_KEY_VISION=your-key-for-gemini-2.5-flash     # Vision: SCANNED_PDF, ảnh
+GOOGLE_API_KEY_TEXT=your-key-for-gemini-2.5-flash-lite  # Text: SOFT_PDF, OCR output
+GOOGLE_API_KEY=fallback-key-if-not-set-above
+GEMINI_VISION_MODEL=gemini-2.5-flash
+GEMINI_TEXT_MODEL=gemini-2.5-flash-lite
 OCR_ENGINE=auto            # auto | paddleocr | easyocr | tesseract
 CONFIDENCE_THRESHOLD=0.65
 MAX_FILE_SIZE_MB=50

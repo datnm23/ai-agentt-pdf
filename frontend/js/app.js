@@ -6,6 +6,9 @@ let currentJobId = null;
 let totalDone = 0;
 let totalItems = 0;
 
+// Stage audit state — reset per job
+let _audit = { raw: null, merge: null, deduped: 0, pass2: null };
+
 // ── Init ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   setupDropZone();
@@ -188,9 +191,20 @@ function startWebSocket(wsPath, jobId) {
 
 // ── Jobs panel ────────────────────────────────────────────────
 function showJobsPanel() {
+  _detectedPath = null; // reset path detection for new job
+  _audit = { raw: null, merge: null, deduped: 0, pass2: null }; // reset audit state
+  const auditBar = document.getElementById('auditBar');
+  if (auditBar) auditBar.classList.add('hidden');
   document.getElementById('jobsPanel').style.display = 'block';
   document.getElementById('pipelineCard').classList.remove('hidden');
   document.getElementById('resultsCard').classList.add('hidden');
+  // Reset step descriptions to defaults for new job
+  const preDesc = document.querySelector('#step-preprocess .step-desc');
+  const ocrDesc = document.querySelector('#step-ocr .step-desc');
+  const aiDesc  = document.querySelector('#step-ai .step-desc');
+  if (preDesc) preDesc.textContent = 'Glare / Deskew / Deblur';
+  if (ocrDesc) ocrDesc.textContent = 'PaddleOCR → EasyOCR → Gemini';
+  if (aiDesc)  aiDesc.textContent  = 'Gemini Flash phân tích';
 }
 
 function addJobToList(jobId, filename) {
@@ -217,6 +231,9 @@ function addJobToList(jobId, filename) {
   list.prepend(item);
 }
 
+// Detected processing path — updated live from step messages
+let _detectedPath = null; // 'soft_pdf' | 'scanned_pdf' | 'image'
+
 function updateJobUI(jobId, status, step, pct) {
   const stepEl = document.getElementById(`jobStep-${jobId}`);
   if (stepEl && step) stepEl.textContent = step;
@@ -226,32 +243,118 @@ function updateJobUI(jobId, status, step, pct) {
   if (circle && pct != null) circle.style.strokeDashoffset = 113 - (pct / 100) * 113;
   if (pctEl  && pct != null) pctEl.textContent = pct + '%';
 
-  // Update icon color by status
   const jobEl = document.getElementById(`job-${jobId}`);
   if (jobEl && status === 'done')   jobEl.style.borderColor = 'var(--accent)';
   if (jobEl && status === 'failed') jobEl.style.borderColor = 'var(--accent-red)';
 
-  // Pipeline steps
-  updatePipelineSteps(status);
+  updatePipelineSteps(status, step);
 }
 
-function updatePipelineSteps(status) {
+function updatePipelineSteps(status, step) {
+  // ── Detect path from step message ────────────────────────────
+  if (step) {
+    if (step.includes('PDF sang ảnh') || step.includes('Đang đọc trang')) {
+      _detectedPath = 'scanned_pdf';
+    } else if (step.includes('Đang đọc text') || step.includes('trích xuất bảng')) {
+      _detectedPath = 'soft_pdf';
+    } else if (step.includes('tiền xử lý') || step.includes('nhận dạng văn bản')) {
+      _detectedPath = 'image';
+    }
+  }
+
+  // ── Update step descriptions based on detected path ──────────
+  const preDesc = document.querySelector('#step-preprocess .step-desc');
+  const ocrDesc = document.querySelector('#step-ocr .step-desc');
+  const aiDesc  = document.querySelector('#step-ai .step-desc');
+  if (_detectedPath === 'scanned_pdf') {
+    if (preDesc) preDesc.textContent = 'PDF → ảnh JPEG (200 DPI)';
+    if (ocrDesc) ocrDesc.textContent = 'Gemini Vision / trang';
+    if (aiDesc)  aiDesc.textContent  = 'Hoàn thành trong bước Vision';
+  } else if (_detectedPath === 'soft_pdf') {
+    if (preDesc) preDesc.textContent = 'Đọc text + bảng pdfplumber';
+    if (ocrDesc) ocrDesc.textContent = 'Markdown table → Gemini Flash';
+    if (aiDesc)  aiDesc.textContent  = 'Gemini Flash phân tích';
+  } else if (_detectedPath === 'image') {
+    if (preDesc) preDesc.textContent = 'Glare / Deskew / Deblur';
+    if (ocrDesc) ocrDesc.textContent = 'PaddleOCR → EasyOCR → Gemini';
+    if (aiDesc)  aiDesc.textContent  = 'Gemini Flash phân tích';
+  }
+
+  // ── Parse audit counts from step message ─────────────────────
+  if (step) {
+    // "🔗 Đã đọc N trang — M dòng thô"
+    const rawMatch = step.match(/(\d+)\s*dòng thô/);
+    if (rawMatch) {
+      _audit.raw = parseInt(rawMatch[1], 10);
+      _updateAuditBar();
+    }
+    // "🔗 Ghép trang → N sản phẩm (loại D trùng)"
+    const mergeMatch = step.match(/Ghép trang.*?→\s*(\d+)\s*sản phẩm/);
+    if (mergeMatch) {
+      _audit.merge = parseInt(mergeMatch[1], 10);
+      const dedupMatch = step.match(/loại\s*(\d+)\s*trùng/);
+      _audit.deduped = dedupMatch ? parseInt(dedupMatch[1], 10) : 0;
+      _updateAuditBar();
+    }
+    // "✅ Pass 2 xong — N sản phẩm"
+    const pass2Match = step.match(/Pass 2 xong.*?(\d+)\s*sản phẩm/);
+    if (pass2Match) {
+      _audit.pass2 = parseInt(pass2Match[1], 10);
+      _updateAuditBar();
+    }
+  }
+
+  // ── Step state (active / done) ────────────────────────────────
+  // pass2 step activates when step text mentions "Pass 2"
+  const isPass2Active = step && step.includes('Pass 2') && !step.includes('Pass 2 xong');
+  const isPass2Done   = step && step.includes('Pass 2 xong');
+
   const stateMap = {
     detecting:     { detect: 'active' },
     preprocessing: { detect: 'done', preprocess: 'active' },
     ocr:           { detect: 'done', preprocess: 'done', ocr: 'active' },
-    extracting:    { detect: 'done', preprocess: 'done', ocr: 'done', ai: 'active' },
-    done:          { detect: 'done', preprocess: 'done', ocr: 'done', ai: 'done' },
+    extracting:    { detect: 'done', preprocess: 'done', ocr: 'done', ai: 'done',
+                     pass2: isPass2Done ? 'done' : isPass2Active ? 'active' : '' },
+    done:          { detect: 'done', preprocess: 'done', ocr: 'done', ai: 'done', pass2: 'done' },
   };
   const emojiMap = { active: '⚙️', done: '✅', '': '⏸' };
   const steps = stateMap[status] || {};
-  ['detect', 'preprocess', 'ocr', 'ai'].forEach(name => {
+
+  // ai step: stays active until pass2 takes over
+  if (status === 'extracting' && !isPass2Active && !isPass2Done) {
+    steps.ai = 'active';
+  }
+
+  ['detect', 'preprocess', 'ocr', 'ai', 'pass2'].forEach(name => {
     const el = document.getElementById(`step-${name}`);
     const statusEl = document.getElementById(`stepStatus-${name}`);
     if (!el) return;
     el.className = `pipeline-step ${steps[name] || ''}`;
     if (statusEl) statusEl.textContent = emojiMap[steps[name] || ''] || '⏸';
   });
+}
+
+function _updateAuditBar() {
+  const bar = document.getElementById('auditBar');
+  if (!bar) return;
+  bar.classList.remove('hidden');
+
+  const rawEl    = document.getElementById('auditRaw');
+  const mergeEl  = document.getElementById('auditMerge');
+  const pass2El  = document.getElementById('auditPass2');
+
+  if (_audit.raw != null && rawEl) {
+    rawEl.innerHTML = `🔍 Thô: <strong>${_audit.raw}</strong> dòng`;
+  }
+  if (_audit.merge != null && mergeEl) {
+    const dedupTxt = _audit.deduped > 0 ? ` <span style="color:var(--accent-yellow,#d29922)">(−${_audit.deduped} trùng)</span>` : '';
+    mergeEl.innerHTML = `🔗 Sau ghép: <strong>${_audit.merge}</strong>${dedupTxt}`;
+    if (_audit.deduped > 0) mergeEl.classList.add('has-dedup');
+  }
+  if (_audit.pass2 != null && pass2El) {
+    pass2El.innerHTML = `✅ Sau Pass 2: <strong>${_audit.pass2}</strong>`;
+    pass2El.classList.add('pass2-done');
+  }
 }
 
 function showPipeline() {
@@ -312,9 +415,14 @@ function renderResults(jobId, data) {
   const card = document.getElementById('resultsCard');
   card.classList.remove('hidden');
 
-  // Meta tags
+  const hasDvt2        = doc.items.some(i => i.dvt_2 || i.don_gia_2 != null);
+  const hasVatPct      = doc.items.some(i => i.vat_pct != null);
+  const hasQuiCach     = doc.items.some(i => i.qui_cach);
+  const hasDonGiaCoVat = doc.items.some(i => i.don_gia_co_vat != null);
+
+  // ── Meta tags ───────────────────────────────────────────────────
   const methodLabel = {
-    pdfplumber: '📄 PDF Mềm', camelot: '📊 Camelot',
+    pdfplumber: '📄 pdfplumber', camelot: '📊 Camelot',
     ocr_paddleocr: '🔤 PaddleOCR', ocr_easyocr: '🔤 EasyOCR',
     ocr_tesseract: '🔤 Tesseract', gemini_vision: '👁️ Gemini Vision',
   };
@@ -323,18 +431,19 @@ function renderResults(jobId, data) {
     image_scan: '🖼️ Ảnh Scan', image_photo: '📱 Ảnh Điện Thoại',
     image_photo_glare: '🌟 Ảnh Lóa', image_skewed: '📐 Ảnh Nghiêng',
   };
-
   document.getElementById('resultsMeta').innerHTML = `
     <span class="meta-tag">${typeLabel[data.document_type] || data.document_type}</span>
     <span class="meta-tag">${methodLabel[data.extraction_method] || data.extraction_method}</span>
     <span class="meta-tag">Độ tin cậy: ${Math.round((data.overall_confidence || 0) * 100)}%</span>
     <span class="meta-tag">${doc.items.length} sản phẩm</span>`;
 
-  // Summary grid
+  // ── Summary grid ────────────────────────────────────────────────
+  const vatInfo = doc.gia_da_bao_gom_vat ? 'Đã bao gồm VAT' : 'Chưa bao gồm VAT';
   const fields = [
-    ['Nhà cung cấp', doc.nha_cung_cap], ['Số báo giá', doc.so_bao_gia],
-    ['Ngày báo giá', doc.ngay_bao_gia], ['Khách hàng', doc.khach_hang],
-    ['Đơn vị tiền', doc.don_vi_tien], ['Bảo hành', doc.bao_hanh],
+    ['Nhà cung cấp',   doc.nha_cung_cap],
+    ['Ngày hiệu lực',  doc.ngay_hieu_luc],
+    ['Đơn vị tiền',    doc.don_vi_tien],
+    ['Giá VAT',        vatInfo],
   ].filter(([, v]) => v);
 
   document.getElementById('docSummary').innerHTML = fields.map(([k, v]) => `
@@ -343,37 +452,97 @@ function renderResults(jobId, data) {
       <div class="summary-value">${escHtml(String(v))}</div>
     </div>`).join('');
 
-  // Table
+  // ── Update pipeline step descriptions by document type ──────────
+  const docType = data.document_type;
+  const preDesc = document.querySelector('#step-preprocess .step-desc');
+  const ocrDesc = document.querySelector('#step-ocr .step-desc');
+  if (preDesc && ocrDesc) {
+    if (docType === 'soft_pdf') {
+      preDesc.textContent = 'Đọc text + bảng pdfplumber';
+      ocrDesc.textContent = 'Markdown table → Gemini Flash';
+    } else if (docType === 'scanned_pdf') {
+      preDesc.textContent = 'PDF → ảnh JPEG (200 DPI)';
+      ocrDesc.textContent = 'Gemini Vision / trang';
+    } else {
+      preDesc.textContent = 'Glare / Deskew / Deblur';
+      ocrDesc.textContent = 'PaddleOCR → EasyOCR → Gemini';
+    }
+  }
+
+  // ── Build table header ──────────────────────────────────────────
+  const table = document.getElementById('dataTable');
+  const thead = table.querySelector('thead');
+  const headers = ['STT', 'Mã SP', 'Tên sản phẩm'];
+  if (hasQuiCach)     { headers.push('Quy cách'); }
+  headers.push('ĐVT', 'Đơn giá chưa VAT');
+  if (hasVatPct)      { headers.push('VAT %'); }
+  if (hasDonGiaCoVat) { headers.push('Đơn giá có VAT'); }
+  if (hasDvt2)        { headers.push('ĐVT 2', 'Đơn giá 2'); }
+  headers.push('Ghi chú', 'Tin cậy');
+  thead.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+  const colCount = headers.length;
+
+  // ── Build table body ────────────────────────────────────────────
   const tbody = document.getElementById('tableBody');
   tbody.innerHTML = '';
-  let calculatedTotal = 0;
 
   if (!doc.items || doc.items.length === 0) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="9" style="text-align:center;color:var(--text-secondary);padding:32px">
+    tr.innerHTML = `<td colspan="${colCount}" style="text-align:center;color:var(--text-secondary);padding:32px">
       ⚠️ Không tìm thấy sản phẩm nào trong file này.<br>
       <small>Vui lòng thử file báo giá/bảng giá có cấu trúc bảng.</small>
     </td>`;
     tbody.appendChild(tr);
   } else {
+    let lastNhomSp = null;
     doc.items.forEach((item, idx) => {
+      // Group header row when nhom_sp changes
+      if (item.nhom_sp && item.nhom_sp !== lastNhomSp) {
+        lastNhomSp = item.nhom_sp;
+        const groupTr = document.createElement('tr');
+        groupTr.className = 'group-header-row';
+        groupTr.innerHTML = `<td colspan="${colCount}" class="group-header-cell">${escHtml(item.nhom_sp)}</td>`;
+        tbody.appendChild(groupTr);
+      }
+
       const conf = item.confidence || 0;
       const confClass = conf >= 0.85 ? 'conf-high' : conf >= 0.6 ? 'conf-medium' : 'conf-low';
-      const confLabel = Math.round(conf * 100) + '%';
-
-      if (item.thanh_tien) calculatedTotal += item.thanh_tien;
+      const hasWarning = item.ghi_chu && item.ghi_chu.includes('⚠️');
 
       const tr = document.createElement('tr');
-      tr.innerHTML = `
+      if (hasWarning) tr.classList.add('row-warning');
+
+      let cells = `
         <td>${item.stt || idx + 1}</td>
         <td><code>${escHtml(item.ma_sp || '—')}</code></td>
-        <td>${escHtml(item.ten_sp)}</td>
+        <td>${escHtml(item.ten_sp)}</td>`;
+
+      if (hasQuiCach) cells += `
+        <td>${escHtml(item.qui_cach || '—')}</td>`;
+
+      cells += `
         <td>${escHtml(item.dvt || '—')}</td>
-        <td class="money">${fmtNum(item.so_luong)}</td>
-        <td class="money">${fmtMoney(item.don_gia, doc.don_vi_tien)}</td>
-        <td class="money">${fmtMoney(item.thanh_tien, doc.don_vi_tien)}</td>
-        <td style="max-width:140px;color:var(--text-secondary)">${escHtml(item.ghi_chu || '')}</td>
-        <td><span class="conf-badge ${confClass}">${confLabel}</span></td>`;
+        <td class="money">${fmtMoney(item.don_gia, doc.don_vi_tien)}</td>`;
+
+      if (hasVatPct) cells += `
+        <td class="money">${item.vat_pct != null ? item.vat_pct + '%' : '—'}</td>`;
+
+      if (hasDonGiaCoVat) cells += `
+        <td class="money">${fmtMoney(item.don_gia_co_vat, doc.don_vi_tien)}</td>`;
+
+      if (hasDvt2) cells += `
+        <td>${escHtml(item.dvt_2 || '—')}</td>
+        <td class="money">${fmtMoney(item.don_gia_2, doc.don_vi_tien)}</td>`;
+
+      const noteHtml = hasWarning
+        ? `<span class="warning-note">${escHtml(item.ghi_chu)}</span>`
+        : escHtml(item.ghi_chu || '');
+
+      cells += `
+        <td class="note-cell">${noteHtml}</td>
+        <td><span class="conf-badge ${confClass}">${Math.round(conf * 100)}%</span></td>`;
+
+      tr.innerHTML = cells;
       tbody.appendChild(tr);
     });
   }
@@ -381,13 +550,36 @@ function renderResults(jobId, data) {
   totalItems = doc.items.length;
   document.getElementById('countItems').textContent = totalItems;
 
-  // Totals bar
-  const total = doc.tong_sau_vat || doc.tong_chua_vat || calculatedTotal;
-  const vatPct = doc.thue_vat_pct || 0;
-  document.getElementById('totalsBar').innerHTML = `
-    ${doc.tong_chua_vat ? `<div class="total-item"><div class="total-label">Tổng chưa VAT</div><div class="total-value money">${fmtMoney(doc.tong_chua_vat, doc.don_vi_tien)}</div></div>` : ''}
-    ${vatPct ? `<div class="total-item"><div class="total-label">VAT (${vatPct}%)</div><div class="total-value money">${fmtMoney(doc.thue_vat_tien, doc.don_vi_tien)}</div></div>` : ''}
-    <div class="total-item"><div class="total-label">TỔNG CỘNG</div><div class="total-value highlight money">${fmtMoney(total || calculatedTotal, doc.don_vi_tien)}</div></div>`;
+  // ── Pipeline audit summary ──────────────────────────────────────
+  const auditDiv = document.getElementById('resultAudit');
+  if (auditDiv) {
+    const corrected = doc.items.filter(i => i.ghi_chu && i.ghi_chu.includes('[Pass2:')).length;
+    const warned    = doc.items.filter(i => i.ghi_chu && i.ghi_chu.includes('⚠️')).length;
+    const noQC      = doc.items.filter(i => !i.qui_cach).length;
+    const noDVT     = doc.items.filter(i => !i.dvt).length;
+
+    const chips = [
+      { label: 'Tổng sản phẩm', num: doc.items.length, cls: 'chip-ok' },
+    ];
+    if (_audit.raw != null)    chips.push({ label: 'Dòng thô', num: _audit.raw });
+    if (_audit.deduped > 0)    chips.push({ label: 'Trùng loại bỏ', num: _audit.deduped, cls: 'chip-warn' });
+    if (corrected > 0)         chips.push({ label: 'Pass 2 chỉnh sửa', num: corrected, cls: 'chip-ok' });
+    if (warned > 0)            chips.push({ label: 'Cảnh báo', num: warned, cls: 'chip-warn' });
+    if (noQC > 0)              chips.push({ label: 'Thiếu qui cách', num: noQC, cls: 'chip-warn' });
+    if (noDVT > 0)             chips.push({ label: 'Thiếu ĐVT', num: noDVT, cls: 'chip-warn' });
+
+    auditDiv.innerHTML = chips.map(c => `
+      <span class="result-audit-chip ${c.cls || ''}">
+        <span class="chip-num">${c.num}</span> ${c.label}
+      </span>`).join('');
+    auditDiv.classList.remove('hidden');
+  }
+
+  // ── Totals bar ──────────────────────────────────────────────────
+  const totalsBar = document.getElementById('totalsBar');
+  const vatStatus = doc.gia_da_bao_gom_vat ? '✓ Đã bao gồm VAT' : '✗ Chưa bao gồm VAT';
+  totalsBar.innerHTML = `
+    <div class="total-item"><div class="total-label">Giá VAT</div><div class="total-value">${vatStatus}</div></div>`;
 }
 
 // ── Export ────────────────────────────────────────────────────
@@ -439,7 +631,8 @@ async function loadHistory() {
       }[job.status] || 'status-processing';
       const statusLabel = {
         done: '✓ Hoàn thành', failed: '✗ Thất bại',
-        pending: '⏳ Chờ', preprocessing: '⚙️ Xử lý', ocr: '🔤 OCR', extracting: '🤖 AI',
+        pending: '⏳ Chờ', detecting: '🔍 Detect',
+        preprocessing: '⚙️ Xử lý', ocr: '🔤 OCR', extracting: '🤖 AI',
       }[job.status] || job.status;
 
       const div = document.createElement('div');

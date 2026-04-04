@@ -26,7 +26,12 @@ def export_excel(job_id: str) -> Optional[Path]:
         return None
 
     output_path = RESULTS_DIR / f"{job_id}_export.xlsx"
-    is_price_list = doc.loai_tai_lieu == "price_list"
+
+    # Detect optional columns once at document level (mirrors frontend logic)
+    has_dvt2         = any(item.dvt_2 or item.don_gia_2 is not None for item in doc.items)
+    has_vat_pct      = any(item.vat_pct is not None for item in doc.items)
+    has_qui_cach     = any(item.qui_cach for item in doc.items)
+    has_don_gia_co_vat = any(item.don_gia_co_vat is not None for item in doc.items)
 
     with pd.ExcelWriter(str(output_path), engine="openpyxl") as writer:
 
@@ -37,21 +42,20 @@ def export_excel(job_id: str) -> Optional[Path]:
                 "STT": item.stt or i,
                 "Nhóm SP": item.nhom_sp or "",
                 "Mã SP": item.ma_sp or "",
-                "Tên sản phẩm / Dịch vụ": item.ten_sp,
+                "Tên sản phẩm": item.ten_sp,
+            }
+            if has_qui_cach:
+                row["Quy cách"] = item.qui_cach or ""
+            row.update({
                 "ĐVT": item.dvt or "",
                 "Đơn giá": item.don_gia,
-            }
-            # Add secondary pricing columns if any item has them
-            if item.dvt_2 or item.don_gia_2:
+            })
+            if has_don_gia_co_vat:
+                row["Đơn giá có VAT"] = item.don_gia_co_vat
+            if has_dvt2:
                 row["ĐVT 2"] = item.dvt_2 or ""
                 row["Đơn giá 2"] = item.don_gia_2
-            # Only show quantity/total for quote/invoice (not price_list)
-            if not is_price_list:
-                row["Số lượng"] = item.so_luong
-                row["Chiết khấu %"] = item.chiet_khau_pct
-                row["Thành tiền"] = item.thanh_tien
-            # VAT per item if different from document VAT
-            if item.vat_pct is not None:
+            if has_vat_pct:
                 row["VAT %"] = item.vat_pct
             row["Ghi chú"] = item.ghi_chu or ""
             row["Độ tin cậy AI"] = f"{item.confidence:.0%}"
@@ -65,49 +69,17 @@ def export_excel(job_id: str) -> Optional[Path]:
         _format_excel_sheet(ws, df_items)
 
         # ── Sheet 2: Summary ───────────────────────────────────
-        loai_tai_lieu_display = {
-            "price_list": "Bảng giá (Price List)",
-            "quote": "Báo giá (Quotation)",
-            "invoice": "Hóa đơn (Invoice)",
-        }.get(doc.loai_tai_lieu or "", doc.loai_tai_lieu or "Không xác định")
-
         summary_info = [
-            "Loại tài liệu", "Nhà cung cấp", "Số báo giá", "Ngày báo giá",
-            "Khách hàng", "Đơn vị tiền", "Số sản phẩm",
+            "Nhà cung cấp", "Ngày hiệu lực", "Giá đã có VAT",
+            "Đơn vị tiền", "Số sản phẩm",
         ]
         summary_values = [
-            loai_tai_lieu_display,
-            doc.nha_cung_cap or "", doc.so_bao_gia or "",
-            doc.ngay_bao_gia or "", doc.khach_hang or "",
-            doc.don_vi_tien, len(doc.items),
+            doc.nha_cung_cap or "",
+            doc.ngay_hieu_luc or "",
+            "Có" if doc.gia_da_bao_gom_vat else "Không",
+            doc.don_vi_tien,
+            len(doc.items),
         ]
-
-        # Only show totals for quote/invoice
-        if not is_price_list:
-            vat_label = f"Thuế VAT ({doc.thue_vat_pct or 10}%)"
-            if doc.gia_da_bao_gom_vat:
-                vat_label += " (đã bao gồm)"
-            summary_info.extend([
-                "Tổng chưa VAT", vat_label,
-                "Tổng sau VAT",
-            ])
-            summary_values.extend([
-                _fmt_money(doc.tong_chua_vat, doc.don_vi_tien),
-                _fmt_money(doc.thue_vat_tien, doc.don_vi_tien),
-                _fmt_money(doc.tong_sau_vat, doc.don_vi_tien),
-            ])
-        else:
-            # For price_list, indicate that totals are not applicable
-            summary_info.append("Giá đã có VAT")
-            summary_values.append("Có" if doc.gia_da_bao_gom_vat else "Không")
-
-        summary_info.extend([
-            "Điều kiện thanh toán", "Thời gian giao hàng", "Bảo hành",
-        ])
-        summary_values.extend([
-            doc.dieu_kien_thanh_toan or "", doc.thoi_gian_giao_hang or "",
-            doc.bao_hanh or "",
-        ])
 
         summary_data = {"Thông tin": summary_info, "Giá trị": summary_values}
         df_summary = pd.DataFrame(summary_data)
@@ -123,7 +95,6 @@ def export_csv(job_id: str) -> Optional[Path]:
         return None
 
     output_path = RESULTS_DIR / f"{job_id}_export.csv"
-    is_price_list = doc.loai_tai_lieu == "price_list"
     rows = []
     for i, item in enumerate(doc.items, 1):
         row = {
@@ -131,19 +102,16 @@ def export_csv(job_id: str) -> Optional[Path]:
             "nhom_sp": item.nhom_sp or "",
             "ma_sp": item.ma_sp or "",
             "ten_sp": item.ten_sp,
+            "qui_cach": item.qui_cach or "",
             "dvt": item.dvt or "",
             "don_gia": item.don_gia,
+            "don_gia_co_vat": item.don_gia_co_vat,
             "dvt_2": item.dvt_2 or "",
             "don_gia_2": item.don_gia_2,
+            "vat_pct": item.vat_pct,
+            "ghi_chu": item.ghi_chu or "",
+            "confidence": item.confidence,
         }
-        # Only include quantity/total for quote/invoice
-        if not is_price_list:
-            row["so_luong"] = item.so_luong
-            row["chiet_khau_pct"] = item.chiet_khau_pct
-            row["thanh_tien"] = item.thanh_tien
-        row["vat_pct"] = item.vat_pct
-        row["ghi_chu"] = item.ghi_chu or ""
-        row["confidence"] = item.confidence
         rows.append(row)
     pd.DataFrame(rows).to_csv(str(output_path), index=False, encoding="utf-8-sig")
     return output_path
